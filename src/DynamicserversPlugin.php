@@ -2,6 +2,8 @@
 
 namespace ByPixelTV\Dynamicservers;
 
+use App\Models\Role;
+use ByPixelTV\Dynamicservers\Filament\Admin\Resources\DynamicTemplateResource;
 use Filament\Contracts\Plugin;
 use Filament\Panel;
 
@@ -14,12 +16,22 @@ class DynamicserversPlugin implements Plugin
 
     public function register(Panel $panel): void
     {
-        // Allows you to use any configuration option that is available to the panel.
-        // This includes registering resources, custom pages, themes, render hooks and more.
+
+        if ($panel->getId() === 'admin') {
+            $panel->resources([
+                DynamicTemplateResource::class,
+            ]);
+        }
+
+        Role::registerCustomDefaultPermissions('dynamic_template');
+        Role::registerCustomModelIcon(
+            'dynamic_template',
+            'tabler-server-2'
+        );
     }
 
     public function boot(Panel $panel): void
     {
-        // Is run only when the panel that the plugin is being registered to is actually in-use. It is executed by a middleware class.
+        //
     }
 }
