@@ -15,6 +15,11 @@ class DynamicserversPluginProvider extends ServiceProvider
 
     public function boot(): void
     {
+        config()->set(
+            'livewire.temporary_file_upload.rules',
+            'file|max:104857600'
+        );
+        
         Server::deleted(function (Server $server): void {
             $dynamicServer = DynamicTemplateServer::query()
                 ->where('server_id', $server->getKey())
