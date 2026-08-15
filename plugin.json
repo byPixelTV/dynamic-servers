@@ -1,0 +1,19 @@
+{
+    "id": "dynamicservers",
+    "name": "dynamicservers",
+    "author": "byPixelTV",
+    "version": "1.0.0",
+    "description": "Allows you to create servers that get loaded by a template and get deleted after they got stopped, just like popular Minecraft clouds allow you to do.",
+    "category": "plugin",
+    "url": null,
+    "update_url": null,
+    "namespace": "ByPixelTV\\Dynamicservers",
+    "class": "DynamicserversPlugin",
+    "panels": null,
+    "panel_version": null,
+    "composer_packages": null,
+    "meta": {
+        "status": "enabled",
+        "status_message": null
+    }
+}
