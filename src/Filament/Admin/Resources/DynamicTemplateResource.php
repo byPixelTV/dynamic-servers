@@ -24,6 +24,7 @@ class DynamicTemplateResource extends Resource
     protected static ?string $model = DynamicTemplate::class;
     protected static string|null|BackedEnum $navigationIcon = 'tabler-server-2';
     protected static ?string $navigationLabel = 'Dynamic Templates';
+
     public static function getFormSections(): array
     {
         return [
@@ -71,6 +72,9 @@ class DynamicTemplateResource extends Resource
                 Action::make('create_server')
                     ->label('Create Server')
                     ->icon('tabler-plus')
+                    ->visible(
+                        fn (): bool => user()?->can('createServer dynamicTemplate') ?? false
+                    )
                     ->color('success')
                     ->schema([
                         Forms\Components\TextInput::make('amount')
@@ -86,6 +90,11 @@ class DynamicTemplateResource extends Resource
                         DynamicTemplate $record,
                         DynamicServerCreationService $creationService
                     ) {
+                        abort_unless(
+                            user()?->can('createServer dynamicTemplate'),
+                            403
+                        );
+                        
                         $amount = (int) $data['amount'];
 
                         $freeAllocations = Allocation::query()

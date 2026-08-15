@@ -2,24 +2,48 @@
 
 namespace ByPixelTV\Dynamicservers\Providers;
 
+use App\Models\Role;
 use App\Models\Server;
 use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
+use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
+use ByPixelTV\Dynamicservers\Policies\DynamicTemplatePolicy;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 
 class DynamicserversPluginProvider extends ServiceProvider
 {
     public function register(): void
     {
+        Role::registerCustomPermissions([
+            'dynamicTemplate' => [
+                'viewAny',
+                'view',
+                'create',
+                'update',
+                'delete',
+                'createServer',
+            ],
+        ]);
+
+        Role::registerCustomModelIcon(
+            'dynamicTemplate',
+            'tabler-server-2'
+        );
     }
 
     public function boot(): void
     {
+        Gate::policy(
+            DynamicTemplate::class,
+            DynamicTemplatePolicy::class
+        );
+
         config()->set(
             'livewire.temporary_file_upload.rules',
             'file|max:104857600'
         );
-        
+
         Server::deleted(function (Server $server): void {
             $dynamicServer = DynamicTemplateServer::query()
                 ->where('server_id', $server->getKey())

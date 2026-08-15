@@ -16,18 +16,11 @@ class DynamicserversPlugin implements Plugin
 
     public function register(Panel $panel): void
     {
-
         if ($panel->getId() === 'admin') {
             $panel->resources([
                 DynamicTemplateResource::class,
             ]);
         }
-
-        Role::registerCustomDefaultPermissions('dynamic_template');
-        Role::registerCustomModelIcon(
-            'dynamic_template',
-            'tabler-server-2'
-        );
     }
 
     public function boot(Panel $panel): void
