@@ -71,7 +71,6 @@ class MonitorDynamicServer implements ShouldQueue
             if (in_array($state, ['offline', 'missing'], true)) {
                 $this->deleteDynamicServer(
                     $server,
-                    $dynamicServer,
                     $repository
                 );
 
@@ -94,11 +93,9 @@ class MonitorDynamicServer implements ShouldQueue
 
     private function deleteDynamicServer(
         Server $server,
-        DynamicTemplateServer $dynamicServer,
         DaemonServerRepository $repository
     ): void {
         $serverId = $server->getKey();
-        $templateId = $dynamicServer->dynamic_template_id;
 
         Log::info('Dynamic server is offline. Deleting.', [
             'server_id' => $serverId,
@@ -108,37 +105,25 @@ class MonitorDynamicServer implements ShouldQueue
             $repository
                 ->setServer($server)
                 ->delete();
-
         } catch (Throwable $exception) {
-            Log::warning(
-                'Could not delete dynamic server from Wings.',
-                [
-                    'server_id' => $serverId,
-                    'error' => $exception->getMessage(),
-                ]
-            );
+            Log::warning('Could not delete dynamic server from Wings.', [
+                'server_id' => $serverId,
+                'error' => $exception->getMessage(),
+            ]);
         }
 
         try {
-            $dynamicServer->delete();
             $server->delete();
 
             Log::info('Dynamic server deleted.', [
                 'server_id' => $serverId,
             ]);
 
-            AutoScaleDynamicTemplate::dispatch(
-                $templateId
-            )->delay(now()->addSecond());
-
         } catch (Throwable $exception) {
-            Log::error(
-                'Could not delete dynamic server from database.',
-                [
-                    'server_id' => $serverId,
-                    'error' => $exception->getMessage(),
-                ]
-            );
+            Log::error('Could not delete dynamic server from database.', [
+                'server_id' => $serverId,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 }

@@ -3,7 +3,6 @@
 namespace ByPixelTV\Dynamicservers\Providers;
 
 use App\Models\Server;
-use ByPixelTV\Dynamicservers\Console\Commands\CleanupDynamicServers;
 use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use Illuminate\Support\ServiceProvider;
@@ -12,9 +11,6 @@ class DynamicserversPluginProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->commands([
-            CleanupDynamicServers::class,
-        ]);
     }
 
     public function boot(): void
@@ -28,7 +24,9 @@ class DynamicserversPluginProvider extends ServiceProvider
                 return;
             }
 
-            $templateId = $dynamicServer->dynamic_template_id;
+            $templateId = (int) $dynamicServer->getAttribute(
+                'dynamic_template_id'
+            );
 
             $dynamicServer->delete();
 
