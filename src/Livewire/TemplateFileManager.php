@@ -288,6 +288,30 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                         )
                     ),
 
+                Action::make('rename')
+                    ->hiddenLabel()
+                    ->tooltip('Rename')
+                    ->icon('tabler-pencil')
+                    ->iconSize(IconSize::Small)
+                    ->schema([
+                        TextInput::make('name')
+                            ->label('New name')
+                            ->required()
+                            ->default(
+                                fn (array $record) => $record['name']
+                            ),
+                    ])
+                    ->action(function (
+                        array $record,
+                        array $data
+                    ): void {
+                        $this->renameEntry(
+                            $record['name'],
+                            $data['name'],
+                            $record['is_directory']
+                        );
+                    }),
+
                 Action::make('delete')
                     ->hiddenLabel()
                     ->tooltip('Delete')
@@ -568,6 +592,94 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
             );
 
         $this->resetTable();
+    }
+
+    public function renameEntry(
+        string $oldName,
+        string $newName,
+        bool $isDirectory
+    ): void {
+        $oldName = trim($oldName);
+        $newName = trim($newName);
+
+        if (
+            !$this->isValidEntryName($oldName)
+            || !$this->isValidEntryName($newName)
+        ) {
+            Notification::make()
+                ->title('Invalid name')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($oldName === $newName) {
+            return;
+        }
+
+        $disk = Storage::disk('local');
+
+        $oldRelativePath = trim(
+            $this->currentPath . '/' . $oldName,
+            '/'
+        );
+
+        $newRelativePath = trim(
+            $this->currentPath . '/' . $newName,
+            '/'
+        );
+
+        $oldPath = $this->fullPath($oldRelativePath);
+        $newPath = $this->fullPath($newRelativePath);
+
+        if (!$disk->exists($oldPath)) {
+            Notification::make()
+                ->title('File or folder not found')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($disk->exists($newPath)) {
+            Notification::make()
+                ->title('Name already exists')
+                ->body(
+                    "An entry named \"{$newName}\" already exists."
+                )
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        try {
+            $disk->move(
+                $oldPath,
+                $newPath
+            );
+
+            Notification::make()
+                ->title(
+                    $isDirectory
+                        ? 'Folder renamed'
+                        : 'File renamed'
+                )
+                ->body(
+                    "{$oldName} → {$newName}"
+                )
+                ->success()
+                ->send();
+
+            $this->resetTable();
+        } catch (Throwable $exception) {
+            Notification::make()
+                ->title('Could not rename')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        }
     }
 
     public function deleteFolder(
