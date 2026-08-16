@@ -9,9 +9,12 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('dynamic_templates', function (Blueprint $table) {
-            $table->foreignId('owner_id')
-                ->nullable()
-                ->constrained('users')
+            $table->unsignedInteger('owner_id')
+                ->nullable();
+
+            $table->foreign('owner_id')
+                ->references('id')
+                ->on('users')
                 ->nullOnDelete();
         });
     }
@@ -19,7 +22,8 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('dynamic_templates', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('owner_id');
+            $table->dropForeign(['owner_id']);
+            $table->dropColumn('owner_id');
         });
     }
 };

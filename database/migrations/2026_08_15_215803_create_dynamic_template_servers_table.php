@@ -15,8 +15,11 @@ return new class extends Migration
                 ->constrained('dynamic_templates')
                 ->cascadeOnDelete();
 
-            $table->foreignId('server_id')
-                ->constrained('servers')
+            $table->unsignedInteger('server_id');
+
+            $table->foreign('server_id')
+                ->references('id')
+                ->on('servers')
                 ->cascadeOnDelete();
 
             $table->timestamps();

@@ -6,31 +6,41 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('dynamic_templates', function (Blueprint $table) {
             $table->id();
             $table->string('name');
-            $table->foreignId('egg_id')->constrained('eggs')->cascadeOnDelete();
-            $table->foreignId('node_id')->constrained('nodes')->cascadeOnDelete();
+
+            $table->unsignedInteger('egg_id');
+            $table->unsignedInteger('node_id');
+
             $table->json('startup_variables')->nullable();
+
             $table->unsignedInteger('memory');
             $table->unsignedInteger('disk');
             $table->unsignedInteger('cpu')->default(0);
+
             $table->unsignedInteger('port_range_start');
             $table->unsignedInteger('port_range_end');
+
             $table->unsignedInteger('min_servers')->default(0);
             $table->boolean('auto_creation')->default(false);
+
             $table->timestamps();
+
+            $table->foreign('egg_id')
+                ->references('id')
+                ->on('eggs')
+                ->cascadeOnDelete();
+
+            $table->foreign('node_id')
+                ->references('id')
+                ->on('nodes')
+                ->cascadeOnDelete();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('dynamic_templates');

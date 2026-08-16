@@ -14,11 +14,11 @@ return new class extends Migration
         });
 
         Schema::table('dynamic_templates', function (Blueprint $table) {
-            $table->foreignId('egg_id')
+            $table->unsignedInteger('egg_id')
                 ->nullable()
                 ->change();
 
-            $table->foreignId('node_id')
+            $table->unsignedInteger('node_id')
                 ->nullable()
                 ->change();
         });
@@ -44,11 +44,11 @@ return new class extends Migration
         });
 
         Schema::table('dynamic_templates', function (Blueprint $table) {
-            $table->foreignId('egg_id')
+            $table->unsignedInteger('egg_id')
                 ->nullable(false)
                 ->change();
 
-            $table->foreignId('node_id')
+            $table->unsignedInteger('node_id')
                 ->nullable(false)
                 ->change();
         });
