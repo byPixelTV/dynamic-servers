@@ -14,6 +14,7 @@ use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use Exception;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
@@ -151,10 +152,6 @@ class DynamicServerCreationService
         return $server;
     }
 
-    /**
-     * @throws FileExistsException
-     * @throws ConnectionException
-     */
     public function applyTemplateFiles(
         DynamicTemplate $template,
         Server $server
@@ -167,15 +164,23 @@ class DynamicServerCreationService
             return;
         }
 
-        $repository = (new DaemonFileRepository())
+        $files = $disk->allFiles($rootPath);
+
+        if (empty($files)) {
+            return;
+        }
+
+        /** @var DaemonFileRepository $repository */
+        $repository = app(DaemonFileRepository::class)
             ->setServer($server);
 
-        foreach ($disk->allFiles($rootPath) as $filePath) {
+        $failedFiles = [];
+
+        foreach ($files as $filePath) {
             $relativePath = ltrim(
-                substr(
-                    $filePath,
-                    strlen($rootPath)
-                ),
+                str($filePath)
+                    ->after($rootPath)
+                    ->toString(),
                 '/'
             );
 
@@ -185,9 +190,49 @@ class DynamicServerCreationService
 
             $content = $disk->get($filePath);
 
-            $repository->putContent(
-                $relativePath,
-                $content
+            $success = false;
+
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                try {
+                    $repository->putContent(
+                        $relativePath,
+                        $content
+                    );
+
+                    $success = true;
+
+                    usleep(50_000);
+
+                    break;
+                } catch (Throwable $exception) {
+                    Log::warning(
+                        'Could not apply template file.',
+                        [
+                            'template_id' => $template->getKey(),
+                            'server_id' => $server->getKey(),
+                            'file' => $relativePath,
+                            'attempt' => $attempt,
+                            'error' => $exception->getMessage(),
+                        ]
+                    );
+
+                    if ($attempt < 3) {
+                        usleep(300_000);
+                    }
+                }
+            }
+
+            if (!$success) {
+                $failedFiles[] = $relativePath;
+            }
+        }
+
+        if (!empty($failedFiles)) {
+            throw new RuntimeException(
+                'Could not apply ' .
+                count($failedFiles) .
+                ' file(s): ' .
+                implode(', ', $failedFiles)
             );
         }
     }

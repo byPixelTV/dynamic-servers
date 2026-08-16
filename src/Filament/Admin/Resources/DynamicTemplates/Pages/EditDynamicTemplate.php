@@ -374,19 +374,10 @@ class EditDynamicTemplate extends EditRecord
                         ->exists()
                 )
                 ->modalSubmitActionLabel('Apply template')
-                ->visible(
-                    fn (): bool =>
-                    DynamicTemplateServer::query()
-                        ->where(
-                            'dynamic_template_id',
-                            $this->getRecord()->getKey()
-                        )
-                        ->exists()
-                )
                 ->action(function (
                     DynamicServerCreationService $creationService
                 ): void {
-                    /** @var \ByPixelTV\Dynamicservers\Models\DynamicTemplate $template */
+                    /** @var DynamicTemplate $template */
                     $template = $this->getRecord();
 
                     $dynamicServers = DynamicTemplateServer::query()
@@ -409,6 +400,8 @@ class EditDynamicTemplate extends EditRecord
                             continue;
                         }
 
+                        $errors = [];
+
                         try {
                             $creationService->applyTemplateFiles(
                                 $template,
@@ -420,6 +413,9 @@ class EditDynamicTemplate extends EditRecord
                             report($exception);
 
                             $failed++;
+
+                            $errors[] =
+                                "{$server->name}: {$exception->getMessage()}";
                         }
                     }
 
@@ -427,7 +423,10 @@ class EditDynamicTemplate extends EditRecord
                         Notification::make()
                             ->title('Template partially applied')
                             ->body(
-                                "{$updated} server(s) updated, {$failed} failed."
+                                "$updated server(s) updated, {$failed} failed." .
+                                (!empty($errors)
+                                    ? "\n" . implode("\n", $errors)
+                                    : '')
                             )
                             ->warning()
                             ->send();

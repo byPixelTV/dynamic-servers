@@ -5,6 +5,7 @@ namespace ByPixelTV\Dynamicservers\Models;
 use App\Models\Egg;
 use App\Models\Node;
 use App\Models\User;
+use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -62,5 +63,35 @@ class DynamicTemplate extends Model
     public function owner(): BelongsTo
     {
         return $this->belongsTo(User::class, 'owner_id');
+    }
+
+    protected static function booted(): void
+    {
+        static::saved(function (DynamicTemplate $template): void {
+            if (!$template->auto_creation) {
+                return;
+            }
+
+            if (
+                !$template->wasRecentlyCreated
+                && !$template->wasChanged([
+                    'auto_creation',
+                    'min_servers',
+                    'node_id',
+                    'egg_id',
+                    'owner_id',
+                    'port_range_start',
+                    'port_range_end',
+                ])
+            ) {
+                return;
+            }
+
+            AutoScaleDynamicTemplate::dispatch(
+                $template->getKey()
+            )->delay(
+                now()->addSecond()
+            );
+        });
     }
 }

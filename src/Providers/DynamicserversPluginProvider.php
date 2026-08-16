@@ -55,13 +55,17 @@ class DynamicserversPluginProvider extends ServiceProvider
             'file|max:104857600'
         );
 
-        Server::deleted(function (Server $server): void {
+        Server::deleting(function (Server $server): void {
             if (!Schema::hasTable('dynamic_template_servers')) {
                 return;
             }
 
+            /** @var DynamicTemplateServer|null $dynamicServer */
             $dynamicServer = DynamicTemplateServer::query()
-                ->where('server_id', $server->getKey())
+                ->where(
+                    'server_id',
+                    $server->getKey()
+                )
                 ->first();
 
             if (!$dynamicServer) {
@@ -76,7 +80,9 @@ class DynamicserversPluginProvider extends ServiceProvider
 
             AutoScaleDynamicTemplate::dispatch(
                 $templateId
-            )->delay(now()->addSecond());
+            )->delay(
+                now()->addSecond()
+            );
         });
     }
 }

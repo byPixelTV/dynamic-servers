@@ -39,10 +39,24 @@ class AutoScaleDynamicTemplate implements ShouldQueue
             ->find($this->templateId);
 
         if (!$template) {
+            Log::warning('AutoScale job stopped because template no longer exists.', [
+                'template_id' => $this->templateId,
+            ]);
+
             return;
         }
 
+        Log::info('AutoScale job started.', [
+            'template_id' => $template->getKey(),
+            'auto_creation' => (bool) $template->auto_creation,
+            'min_servers' => (int) $template->min_servers,
+        ]);
+
         if (!$template->auto_creation) {
+            Log::debug('AutoScale job stopped because auto creation is disabled.', [
+                'template_id' => $template->getKey(),
+            ]);
+
             return;
         }
 
@@ -56,6 +70,10 @@ class AutoScaleDynamicTemplate implements ShouldQueue
         );
 
         if (!$lock->get()) {
+            Log::debug('AutoScale skipped because another scaling job holds the lock.', [
+                'template_id' => $template->getKey(),
+            ]);
+
             $this->scheduleNext($template);
 
             return;
@@ -66,9 +84,18 @@ class AutoScaleDynamicTemplate implements ShouldQueue
                 $template,
                 $creationService
             );
+        } catch (Throwable $exception) {
+            Log::error('Unexpected error during dynamic template auto scaling.', [
+                'template_id' => $template->getKey(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            report($exception);
         } finally {
             $lock->release();
         }
+
+        $template->refresh();
 
         $this->scheduleNext($template);
     }
@@ -77,52 +104,47 @@ class AutoScaleDynamicTemplate implements ShouldQueue
         DynamicTemplate $template,
         DynamicServerCreationService $creationService
     ): void {
-        if (!$template->owner_id || !$template->owner()->exists()) {
-            Log::error('Dynamic template auto scaling stopped: owner missing.', [
-                'template_id' => $template->getKey(),
-            ]);
-
-            return;
-        }
-
-        if (!$template->node_id || !$template->node()->exists()) {
-            Log::error('Dynamic template auto scaling stopped: node missing.', [
-                'template_id' => $template->getKey(),
-            ]);
-
-            return;
-        }
-
-        if (!$template->egg_id || !$template->egg()->exists()) {
-            Log::error('Dynamic template auto scaling stopped: egg missing.', [
-                'template_id' => $template->getKey(),
-            ]);
-
-            return;
-        }
-
         $minimum = max(
             0,
-            $template->min_servers
+            (int) $template->min_servers
         );
 
         $current = DynamicTemplateServer::query()
-            ->where('dynamic_template_id', $template->getKey())
+            ->where(
+                'dynamic_template_id',
+                $template->getKey()
+            )
             ->count();
 
-        if ($current >= $minimum) {
+        $needed = max(
+            0,
+            $minimum - $current
+        );
+
+        Log::info('Dynamic template scale status.', [
+            'template_id' => $template->getKey(),
+            'current' => $current,
+            'minimum' => $minimum,
+            'needed' => $needed,
+        ]);
+
+        if ($needed <= 0) {
             return;
         }
 
-        $needed = $minimum - $current;
-
         $freeAllocations = Allocation::query()
-            ->where('node_id', $template->node_id)
+            ->where(
+                'node_id',
+                $template->node_id
+            )
             ->whereNull('server_id')
-            ->whereBetween('port', [
-                $template->port_range_start,
-                $template->port_range_end,
-            ])
+            ->whereBetween(
+                'port',
+                [
+                    $template->port_range_start,
+                    $template->port_range_end,
+                ]
+            )
             ->count();
 
         if ($freeAllocations <= 0) {
@@ -132,6 +154,7 @@ class AutoScaleDynamicTemplate implements ShouldQueue
                     'template_id' => $template->getKey(),
                     'current' => $current,
                     'minimum' => $minimum,
+                    'needed' => $needed,
                 ]
             );
 
@@ -154,20 +177,26 @@ class AutoScaleDynamicTemplate implements ShouldQueue
 
         for ($i = 0; $i < $amountToCreate; $i++) {
             try {
-                $creationService->create($template);
+                $server = $creationService->create(
+                    $template
+                );
 
                 Log::info('Auto-created dynamic server.', [
                     'template_id' => $template->getKey(),
+                    'server_id' => $server->getKey(),
                 ]);
-
             } catch (Throwable $exception) {
                 Log::error(
                     'Auto scaling could not create a dynamic server.',
                     [
                         'template_id' => $template->getKey(),
+                        'iteration' => $i + 1,
+                        'requested' => $amountToCreate,
                         'error' => $exception->getMessage(),
                     ]
                 );
+
+                report($exception);
 
                 break;
             }
@@ -177,7 +206,10 @@ class AutoScaleDynamicTemplate implements ShouldQueue
     protected function validateTemplateDependencies(
         DynamicTemplate $template
     ): bool {
-        if (!$template->owner_id || !$template->owner()->exists()) {
+        if (
+            !$template->owner_id
+            || !$template->owner()->exists()
+        ) {
             $this->disableAutoScaling(
                 $template,
                 'Configured owner no longer exists.'
@@ -186,7 +218,10 @@ class AutoScaleDynamicTemplate implements ShouldQueue
             return false;
         }
 
-        if (!$template->node_id || !$template->node()->exists()) {
+        if (
+            !$template->node_id
+            || !$template->node()->exists()
+        ) {
             $this->disableAutoScaling(
                 $template,
                 'Configured node no longer exists.'
@@ -195,7 +230,10 @@ class AutoScaleDynamicTemplate implements ShouldQueue
             return false;
         }
 
-        if (!$template->egg_id || !$template->egg()->exists()) {
+        if (
+            !$template->egg_id
+            || !$template->egg()->exists()
+        ) {
             $this->disableAutoScaling(
                 $template,
                 'Configured egg no longer exists.'
@@ -211,8 +249,9 @@ class AutoScaleDynamicTemplate implements ShouldQueue
         DynamicTemplate $template,
         string $reason
     ): void {
-        $template->auto_creation = false;
-        $template->save();
+        $template->forceFill([
+            'auto_creation' => false,
+        ])->save();
 
         Log::error('Dynamic template auto scaling disabled.', [
             'template_id' => $template->getKey(),
@@ -224,11 +263,17 @@ class AutoScaleDynamicTemplate implements ShouldQueue
         DynamicTemplate $template
     ): void {
         if (!$template->auto_creation) {
+            Log::debug('AutoScale loop not rescheduled because auto creation is disabled.', [
+                'template_id' => $template->getKey(),
+            ]);
+
             return;
         }
 
         self::dispatch(
             $template->getKey()
-        )->delay(now()->addSeconds(5));
+        )->delay(
+            now()->addSeconds(5)
+        );
     }
 }
