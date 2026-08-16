@@ -78,6 +78,16 @@ class DynamicserversPluginProvider extends ServiceProvider
 
             $dynamicServer->delete();
 
+            $template = DynamicTemplate::query()
+                ->find($templateId);
+
+            if (
+                !$template
+                || !$template->auto_creation
+            ) {
+                return;
+            }
+
             AutoScaleDynamicTemplate::dispatch(
                 $templateId
             )->delay(

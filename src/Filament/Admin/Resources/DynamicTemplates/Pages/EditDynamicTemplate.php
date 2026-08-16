@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Repositories\Daemon\DaemonServerRepository;
 use ByPixelTV\Dynamicservers\Filament\Admin\Resources\DynamicTemplateResource;
 use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
+use ByPixelTV\Dynamicservers\Jobs\StopAndDeleteDynamicServer;
 use ByPixelTV\Dynamicservers\Livewire\TemplateFileManager;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
@@ -457,77 +458,61 @@ class EditDynamicTemplate extends EditRecord
                         ->exists()
                 )
                 ->requiresConfirmation()
-                ->modalHeading(fn () =>
-                    'Delete all ' .
-                    DynamicTemplateServer::query()
-                        ->where('dynamic_template_id', $this->getRecord()->getKey())
-                        ->count() .
-                    ' dynamic servers?'
-                )
+                ->modalHeading(function (): string {
+                    $count = DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $this->getRecord()->getKey()
+                        )
+                        ->count();
+
+                    return "Delete all {$count} dynamic servers?";
+                })
                 ->modalDescription(
-                    'This will permanently delete every server created from this template. Auto creation will also be disabled.'
+                    'Every server will first be stopped gracefully. '
+                    . 'If a server does not stop within 30 seconds, '
+                    . 'it will be forcefully stopped. '
+                    . 'Auto creation will also be disabled.'
                 )
-                ->modalSubmitActionLabel('Delete all servers')
+                ->modalSubmitActionLabel(
+                    'Stop & delete all servers'
+                )
                 ->action(function (): void {
+                    /** @var DynamicTemplate $record */
                     $record = $this->getRecord();
 
                     $record->update([
                         'auto_creation' => false,
                     ]);
 
-                    $dynamicServers = DynamicTemplateServer::query()
-                        ->where('dynamic_template_id', $record->getKey())
-                        ->with('server')
-                        ->get();
+                    $serverIds = DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $record->getKey()
+                        )
+                        ->pluck('server_id');
 
-                    $deleted = 0;
-                    $failed = 0;
-
-                    foreach ($dynamicServers as $dynamicServer) {
-                        /** @var DynamicTemplateServer $dynamicServer */
-                        /** @var Server|null $server */
-                        $server = $dynamicServer->server;
-
-                        if (!$server) {
-                            $dynamicServer->delete();
-                            continue;
-                        }
-
-                        try {
-                            $repository = app(DaemonServerRepository::class);
-
-                            try {
-                                $repository
-                                    ->setServer($server)
-                                    ->delete();
-                            } catch (Throwable) {
-                            }
-
-                            $server->delete();
-
-                            $deleted++;
-                        } catch (Throwable $exception) {
-                            report($exception);
-
-                            $failed++;
-                        }
-                    }
-
-                    if ($failed > 0) {
+                    if ($serverIds->isEmpty()) {
                         Notification::make()
-                            ->title('Servers partially deleted')
-                            ->body(
-                                "{$deleted} server(s) deleted, {$failed} failed."
-                            )
+                            ->title('No dynamic servers found')
                             ->warning()
                             ->send();
 
                         return;
                     }
 
+                    foreach ($serverIds as $serverId) {
+                        StopAndDeleteDynamicServer::dispatch(
+                            (int) $serverId
+                        );
+                    }
+
                     Notification::make()
-                        ->title('All dynamic servers deleted')
-                        ->body("{$deleted} server(s) deleted.")
+                        ->title('Server shutdown started')
+                        ->body(
+                            $serverIds->count()
+                            . ' server(s) are now being stopped and deleted.'
+                        )
                         ->success()
                         ->send();
                 }),

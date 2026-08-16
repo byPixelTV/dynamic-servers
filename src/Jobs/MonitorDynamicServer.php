@@ -52,6 +52,14 @@ class MonitorDynamicServer implements ShouldQueue
             return;
         }
 
+        if (
+            Cache::has(
+                "dynamicservers:deleting:{$server->getKey()}"
+            )
+        ) {
+            return;
+        }
+
         $lock = Cache::lock(
             "dynamicservers:monitor:{$server->getKey()}",
             10
@@ -238,6 +246,13 @@ class MonitorDynamicServer implements ShouldQueue
         Server $server,
         DaemonServerRepository $repository
     ): void {
+        if (
+            Cache::has(
+                "dynamicservers:deleting:{$server->getKey()}"
+            )
+        ) {
+            return;
+        }
         $serverId = $server->getKey();
 
         Log::info(
