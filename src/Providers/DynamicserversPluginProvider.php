@@ -9,6 +9,7 @@ use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use ByPixelTV\Dynamicservers\Policies\DynamicTemplatePolicy;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 
 class DynamicserversPluginProvider extends ServiceProvider
@@ -45,6 +46,10 @@ class DynamicserversPluginProvider extends ServiceProvider
         );
 
         Server::deleted(function (Server $server): void {
+            if (!Schema::hasTable('dynamic_template_servers')) {
+                return;
+            }
+
             $dynamicServer = DynamicTemplateServer::query()
                 ->where('server_id', $server->getKey())
                 ->first();

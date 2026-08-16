@@ -94,7 +94,7 @@ class DynamicTemplateResource extends Resource
                             user()?->can('createServer dynamicTemplate'),
                             403
                         );
-                        
+
                         $amount = (int) $data['amount'];
 
                         $freeAllocations = Allocation::query()
