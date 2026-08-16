@@ -9,6 +9,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Concerns\InteractsWithSchemas;
 use Filament\Schemas\Contracts\HasSchemas;
+use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\IconSize;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -22,6 +23,12 @@ use Livewire\Component;
 use Livewire\WithFileUploads;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
+use App\Enums\EditorLanguages;
+use App\Filament\Components\Forms\Fields\MonacoEditor;
+use Filament\Forms\Components\Select;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Schema;
 
 class TemplateFileManager extends Component implements HasActions, HasSchemas, HasTable
 {
@@ -37,7 +44,7 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
 
     public ?string $editingFile = null;
 
-    public string $editorContent = '';
+    public ?array $editorData = [];
 
     protected function rootPath(): string
     {
@@ -60,6 +67,71 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
         Storage::disk('local')->makeDirectory(
             $this->rootPath()
         );
+    }
+
+    public function editorForm(Schema $schema): Schema
+    {
+        return $schema
+            ->statePath('editorData')
+            ->components([
+                Section::make(
+                    $this->editingFile
+                        ? 'Edit ' . $this->editingFile
+                        : 'Edit file'
+                )
+                    ->footerActions([
+                        Action::make('save_close_file')
+                            ->label('Save & Close')
+                            ->icon('tabler-door-exit')
+                            ->keyBindings('mod+shift+s')
+                            ->action(function () {
+                                $this->saveFile();
+                                $this->closeEditor();
+                            }),
+
+                        Action::make('save_file')
+                            ->label('Save')
+                            ->icon('tabler-device-floppy')
+                            ->keyBindings('mod+s')
+                            ->action(
+                                fn () => $this->saveFile()
+                            ),
+
+                        Action::make('cancel_edit_file')
+                            ->label('Cancel')
+                            ->color('danger')
+                            ->icon('tabler-x')
+                            ->action(
+                                fn () => $this->closeEditor()
+                            ),
+                    ])
+                    ->footerActionsAlignment(
+                        Alignment::End
+                    )
+                    ->schema([
+                        Select::make('lang')
+                            ->label('Syntax')
+                            ->searchable()
+                            ->live()
+                            ->options(EditorLanguages::class)
+                            ->selectablePlaceholder(false)
+                            ->afterStateUpdated(
+                                fn ($state) =>
+                                $this->dispatch(
+                                    'setLanguage',
+                                    lang: $state
+                                )
+                            ),
+
+                        MonacoEditor::make('editor')
+                            ->hiddenLabel()
+                            ->language(
+                                fn (Get $get) =>
+                                $get('lang')
+                            ),
+                    ])
+                    ->columnSpanFull(),
+            ]);
     }
 
     protected function getEntries(): Collection
@@ -546,72 +618,74 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
 
     public function isEditableFile(string $name): bool
     {
-        $extension = strtolower(
-            pathinfo($name, PATHINFO_EXTENSION)
-        );
-
-        $editableExtensions = [
-            'txt',
-            'log',
-            'md',
-
-            'json',
-            'json5',
-            'yml',
-            'yaml',
-            'toml',
-
-            'properties',
-            'conf',
-            'cfg',
-            'ini',
-
-            'xml',
-            'html',
-            'htm',
-            'css',
-
-            'js',
-            'ts',
-
-            'php',
-            'java',
-            'kt',
-            'kts',
-
-            'py',
-            'rb',
-            'go',
-            'rs',
-
-            'sh',
-            'bash',
-            'bat',
-            'cmd',
-            'ps1',
-
-            'sql',
-
-            'env',
-            'mcmeta',
-        ];
-
-        if (in_array($extension, $editableExtensions, true)) {
-            return true;
+        if (!$this->isValidEntryName($name)) {
+            return false;
         }
 
-        return in_array(
-            strtolower($name),
-            [
-                '.env',
-                '.gitignore',
-                '.gitattributes',
-                'dockerfile',
-                'license',
-                'readme',
-            ],
-            true
+        $relativePath = trim(
+            $this->currentPath . '/' . $name,
+            '/'
         );
+
+        $path = $this->fullPath($relativePath);
+
+        $disk = Storage::disk('local');
+
+        if (!$disk->exists($path)) {
+            return false;
+        }
+
+        try {
+            if ($disk->size($path) > 5 * 1024 * 1024) {
+                return false;
+            }
+
+            $stream = $disk->readStream($path);
+
+            if ($stream === false) {
+                return false;
+            }
+
+            $sample = fread($stream, 8192);
+
+            fclose($stream);
+
+            if ($sample === false) {
+                return false;
+            }
+
+            if ($sample === '') {
+                return true;
+            }
+
+            if (str_contains($sample, "\0")) {
+                return false;
+            }
+
+            $length = strlen($sample);
+            $controlCharacters = 0;
+
+            for ($i = 0; $i < $length; $i++) {
+                $byte = ord($sample[$i]);
+
+                if (
+                    $byte < 32
+                    && $byte !== 9
+                    && $byte !== 10
+                    && $byte !== 13
+                ) {
+                    $controlCharacters++;
+                }
+            }
+
+            /*
+             * If more than 10% of the sample consists of strange
+             * control characters, treat it as binary.
+             */
+            return ($controlCharacters / $length) < 0.10;
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     public function openFile(string $name): void
@@ -646,10 +720,6 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
             return;
         }
 
-        /*
-         * Don't accidentally load gigantic logs/configs
-         * into Livewire / the browser.
-         */
         $maxEditorSize = 5 * 1024 * 1024;
 
         if ($disk->size($path) > $maxEditorSize) {
@@ -663,8 +733,27 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
         }
 
         try {
-            $this->editorContent = $disk->get($path);
+            $content = $disk->get($path);
+
             $this->editingFile = $name;
+
+            $extension = pathinfo(
+                $name,
+                PATHINFO_EXTENSION
+            );
+
+            $language = EditorLanguages::fromWithAlias(
+                $extension
+            );
+
+            $this->editorData = [
+                'lang' => $language,
+                'editor' => $content,
+            ];
+
+            $this->editorForm->fill(
+                $this->editorData
+            );
         } catch (Throwable $exception) {
             Notification::make()
                 ->title('Could not open file')
@@ -684,7 +773,9 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
             abort(422);
         }
 
-        if (strlen($this->editorContent) > 5 * 1024 * 1024) {
+        $content = $this->editorData['editor'] ?? '';
+
+        if (strlen($content) > 5 * 1024 * 1024) {
             Notification::make()
                 ->title('File too large')
                 ->body('The editor is limited to 5 MB.')
@@ -695,18 +786,21 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
         }
 
         $relativePath = trim(
-            $this->currentPath . '/' . $this->editingFile,
+            $this->currentPath
+            . '/'
+            . $this->editingFile,
             '/'
         );
 
         try {
             Storage::disk('local')->put(
                 $this->fullPath($relativePath),
-                $this->editorContent
+                $content
             );
 
             Notification::make()
                 ->title('File saved')
+                ->body($this->editingFile)
                 ->success()
                 ->send();
 
@@ -723,7 +817,8 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
     public function closeEditor(): void
     {
         $this->editingFile = null;
-        $this->editorContent = '';
+
+        $this->editorData = [];
     }
 
     protected function formatBytes(
