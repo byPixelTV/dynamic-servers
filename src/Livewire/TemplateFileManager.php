@@ -33,7 +33,11 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
 
     public string $currentPath = '';
 
-    public $newFile = null;
+    public array $newFiles = [];
+
+    public ?string $editingFile = null;
+
+    public string $editorContent = '';
 
     protected function rootPath(): string
     {
@@ -152,12 +156,17 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                     ->since(),
             ])
 
-            ->recordAction(
-                fn (array $record) =>
-                $record['is_directory']
-                    ? 'open'
-                    : null
-            )
+            ->recordAction(function (array $record): ?string {
+                if ($record['is_directory']) {
+                    return 'open';
+                }
+
+                if ($this->isEditableFile($record['name'])) {
+                    return 'edit';
+                }
+
+                return null;
+            })
 
             ->recordActions([
                 Action::make('open')
@@ -174,6 +183,21 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                         $this->openFolder(
                             $record['name']
                         )
+                    ),
+
+                Action::make('edit')
+                    ->hiddenLabel()
+                    ->tooltip('Edit')
+                    ->icon('tabler-pencil')
+                    ->iconSize(IconSize::Small)
+                    ->visible(
+                        fn (array $record) =>
+                            !$record['is_directory']
+                            && $this->isEditableFile($record['name'])
+                    )
+                    ->action(
+                        fn (array $record) =>
+                        $this->openFile($record['name'])
                     ),
 
                 Action::make('download')
@@ -222,6 +246,21 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                     ->visible(fn () => $this->currentPath !== '')
                     ->action(fn () => $this->goBack()),
 
+                Action::make('new_file')
+                    ->hiddenLabel()
+                    ->tooltip('New file')
+                    ->icon('tabler-file-plus')
+                    ->iconSize(IconSize::Small)
+                    ->schema([
+                        TextInput::make('name')
+                            ->label('File name')
+                            ->placeholder('config.yml')
+                            ->required(),
+                    ])
+                    ->action(function (array $data) {
+                        $this->createFile($data['name']);
+                    }),
+
                 Action::make('new_folder')
                     ->hiddenLabel()
                     ->tooltip('New folder')
@@ -241,6 +280,8 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
     public function openFolder(
         string $name
     ): void {
+        $this->closeEditor();
+
         $this->currentPath = trim(
             $this->currentPath . '/' . $name,
             '/'
@@ -251,6 +292,8 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
 
     public function goBack(): void
     {
+        $this->closeEditor();
+
         if ($this->currentPath === '') {
             return;
         }
@@ -271,12 +314,59 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
     public function goTo(
         string $path
     ): void {
+        $this->closeEditor();
+
         $this->currentPath = trim(
             $path,
             '/'
         );
 
         $this->resetTable();
+    }
+
+    public function createFile(string $name): void
+    {
+        $name = trim($name);
+
+        if (!$this->isValidEntryName($name)) {
+            Notification::make()
+                ->title('Invalid file name')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $path = $this->fullPath(
+            trim(
+                $this->currentPath . '/' . $name,
+                '/'
+            )
+        );
+
+        $disk = Storage::disk('local');
+
+        if ($disk->exists($path)) {
+            Notification::make()
+                ->title('File already exists')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $disk->put($path, '');
+
+        Notification::make()
+            ->title('File created')
+            ->success()
+            ->send();
+
+        $this->resetTable();
+
+        if ($this->isEditableFile($name)) {
+            $this->openFile($name);
+        }
     }
 
     public function createFolder(
@@ -343,59 +433,49 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
         $this->resetTable();
     }
 
-    public function storeUploadedFile(
-        string $relativePath = ''
-    ): void {
+    public function storeUploadedFiles(): void
+    {
         $this->validate([
-            'newFile' =>
-                'required|file|max:51200',
+            'newFiles' => 'required|array',
+            'newFiles.*' => 'required|file|max:104857600',
         ]);
 
-        $relativePath = trim(
-            str_replace(
-                '\\',
-                '/',
-                $relativePath
-            ),
-            '/'
-        );
-
-        if (
-            str_contains(
-                $relativePath,
-                '..'
-            )
-        ) {
-            abort(422);
-        }
-
         $directory = trim(
-            $this->currentPath .
-            '/' .
-            $relativePath,
+            $this->currentPath,
             '/'
         );
 
         Storage::disk('local')
             ->makeDirectory(
-                $this->fullPath(
-                    $directory
-                )
+                $this->fullPath($directory)
             );
 
-        $name =
-            $this->newFile
-                ->getClientOriginalName();
+        foreach ($this->newFiles as $file) {
+            $name = $file->getClientOriginalName();
 
-        $this->newFile->storeAs(
-            $this->fullPath(
-                $directory
-            ),
-            $name,
-            'local'
-        );
+            if (!$this->isValidEntryName($name)) {
+                continue;
+            }
 
-        $this->newFile = null;
+            $file->storeAs(
+                $this->fullPath($directory),
+                $name,
+                'local'
+            );
+        }
+
+        $count = count($this->newFiles);
+
+        $this->newFiles = [];
+
+        Notification::make()
+            ->title(
+                $count === 1
+                    ? 'File uploaded'
+                    : "$count files uploaded"
+            )
+            ->success()
+            ->send();
 
         $this->resetTable();
     }
@@ -451,6 +531,199 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                     )
                 )
             );
+    }
+
+    protected function isValidEntryName(string $name): bool
+    {
+        $name = trim($name);
+
+        return $name !== ''
+            && $name !== '.'
+            && $name !== '..'
+            && !str_contains($name, '/')
+            && !str_contains($name, '\\');
+    }
+
+    public function isEditableFile(string $name): bool
+    {
+        $extension = strtolower(
+            pathinfo($name, PATHINFO_EXTENSION)
+        );
+
+        $editableExtensions = [
+            'txt',
+            'log',
+            'md',
+
+            'json',
+            'json5',
+            'yml',
+            'yaml',
+            'toml',
+
+            'properties',
+            'conf',
+            'cfg',
+            'ini',
+
+            'xml',
+            'html',
+            'htm',
+            'css',
+
+            'js',
+            'ts',
+
+            'php',
+            'java',
+            'kt',
+            'kts',
+
+            'py',
+            'rb',
+            'go',
+            'rs',
+
+            'sh',
+            'bash',
+            'bat',
+            'cmd',
+            'ps1',
+
+            'sql',
+
+            'env',
+            'mcmeta',
+        ];
+
+        if (in_array($extension, $editableExtensions, true)) {
+            return true;
+        }
+
+        return in_array(
+            strtolower($name),
+            [
+                '.env',
+                '.gitignore',
+                '.gitattributes',
+                'dockerfile',
+                'license',
+                'readme',
+            ],
+            true
+        );
+    }
+
+    public function openFile(string $name): void
+    {
+        if (
+            !$this->isValidEntryName($name)
+            || !$this->isEditableFile($name)
+        ) {
+            Notification::make()
+                ->title('File cannot be edited')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $relativePath = trim(
+            $this->currentPath . '/' . $name,
+            '/'
+        );
+
+        $path = $this->fullPath($relativePath);
+
+        $disk = Storage::disk('local');
+
+        if (!$disk->exists($path)) {
+            Notification::make()
+                ->title('File not found')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        /*
+         * Don't accidentally load gigantic logs/configs
+         * into Livewire / the browser.
+         */
+        $maxEditorSize = 5 * 1024 * 1024;
+
+        if ($disk->size($path) > $maxEditorSize) {
+            Notification::make()
+                ->title('File too large')
+                ->body('Files larger than 5 MB cannot be edited in the browser.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        try {
+            $this->editorContent = $disk->get($path);
+            $this->editingFile = $name;
+        } catch (Throwable $exception) {
+            Notification::make()
+                ->title('Could not open file')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        }
+    }
+
+    public function saveFile(): void
+    {
+        if (!$this->editingFile) {
+            return;
+        }
+
+        if (!$this->isValidEntryName($this->editingFile)) {
+            abort(422);
+        }
+
+        if (strlen($this->editorContent) > 5 * 1024 * 1024) {
+            Notification::make()
+                ->title('File too large')
+                ->body('The editor is limited to 5 MB.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $relativePath = trim(
+            $this->currentPath . '/' . $this->editingFile,
+            '/'
+        );
+
+        try {
+            Storage::disk('local')->put(
+                $this->fullPath($relativePath),
+                $this->editorContent
+            );
+
+            Notification::make()
+                ->title('File saved')
+                ->success()
+                ->send();
+
+            $this->resetTable();
+        } catch (Throwable $exception) {
+            Notification::make()
+                ->title('Could not save file')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        }
+    }
+
+    public function closeEditor(): void
+    {
+        $this->editingFile = null;
+        $this->editorContent = '';
     }
 
     protected function formatBytes(
@@ -536,7 +809,7 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
 
     public function getUploadSizeLimit(): int
     {
-        return 50 * 1024 * 1024;
+        return 100 * 1024 * 1024 * 1024;
     }
 
     public function render(): View
