@@ -10,6 +10,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -50,12 +51,22 @@ class MonitorDynamicServer implements ShouldQueue
             return;
         }
 
+        $lock = Cache::lock(
+            "dynamicservers:monitor:{$server->getKey()}",
+            10
+        );
+
+        if (!$lock->get()) {
+            $this->scheduleNext($dynamicServer);
+
+            return;
+        }
+
         try {
             $server->refresh();
-
+            
             if ($server->status !== null) {
-                self::dispatch($dynamicServer->getKey())
-                    ->delay(now()->addSeconds(5));
+                $this->scheduleNext($dynamicServer);
 
                 return;
             }
@@ -68,27 +79,101 @@ class MonitorDynamicServer implements ShouldQueue
                 (string) ($details['state'] ?? '')
             );
 
-            if (in_array($state, ['offline', 'missing'], true)) {
-                $this->deleteDynamicServer(
-                    $server,
-                    $repository
-                );
+            Log::debug('Dynamic server monitor state.', [
+                'server_id' => $server->getKey(),
+                'state' => $state,
+            ]);
+
+            $offlineKey =
+                "dynamicservers:offline-since:{$server->getKey()}";
+
+            if (
+                $server->created_at?->gt(
+                    now()->subSeconds(30)
+                )
+            ) {
+                Cache::forget($offlineKey);
+
+                $this->scheduleNext($dynamicServer);
 
                 return;
             }
 
-            self::dispatch($dynamicServer->getKey())
-                ->delay(now()->addSeconds(5));
+            if (
+                !in_array(
+                    $state,
+                    ['offline', 'missing'],
+                    true
+                )
+            ) {
+                Cache::forget($offlineKey);
+
+                $this->scheduleNext($dynamicServer);
+
+                return;
+            }
+
+            $offlineSince = Cache::get(
+                $offlineKey
+            );
+
+            if ($offlineSince === null) {
+                Cache::put(
+                    $offlineKey,
+                    now()->timestamp,
+                    now()->addMinutes(5)
+                );
+
+                $this->scheduleNext($dynamicServer);
+
+                return;
+            }
+
+            if (
+                now()->timestamp
+                - (int) $offlineSince
+                < 15
+            ) {
+                $this->scheduleNext($dynamicServer);
+
+                return;
+            }
+
+            Cache::forget($offlineKey);
+
+            $this->deleteDynamicServer(
+                $server,
+                $repository
+            );
 
         } catch (Throwable $exception) {
-            Log::error('Dynamic server monitor failed.', [
-                'server_id' => $server->getKey(),
-                'error' => $exception->getMessage(),
-            ]);
+            Log::error(
+                'Dynamic server monitor failed.',
+                [
+                    'server_id' =>
+                        $server->getKey(),
 
-            self::dispatch($dynamicServer->getKey())
-                ->delay(now()->addSeconds(5));
+                    'error' =>
+                        $exception->getMessage(),
+                ]
+            );
+
+            $this->scheduleNext(
+                $dynamicServer
+            );
+        } finally {
+            $lock->release();
         }
+    }
+
+    private function scheduleNext(
+        DynamicTemplateServer $dynamicServer
+    ): void {
+        self::dispatch(
+            $dynamicServer->getKey()
+        )->delay(
+            now()->addSeconds(5)
+        );
     }
 
     private function deleteDynamicServer(
@@ -97,33 +182,46 @@ class MonitorDynamicServer implements ShouldQueue
     ): void {
         $serverId = $server->getKey();
 
-        Log::info('Dynamic server is offline. Deleting.', [
-            'server_id' => $serverId,
-        ]);
+        Log::info(
+            'Dynamic server confirmed offline. Deleting.',
+            [
+                'server_id' => $serverId,
+            ]
+        );
 
         try {
             $repository
                 ->setServer($server)
                 ->delete();
         } catch (Throwable $exception) {
-            Log::warning('Could not delete dynamic server from Wings.', [
-                'server_id' => $serverId,
-                'error' => $exception->getMessage(),
-            ]);
+            Log::warning(
+                'Could not delete dynamic server from Wings.',
+                [
+                    'server_id' => $serverId,
+                    'error' =>
+                        $exception->getMessage(),
+                ]
+            );
         }
 
         try {
             $server->delete();
 
-            Log::info('Dynamic server deleted.', [
-                'server_id' => $serverId,
-            ]);
-
+            Log::info(
+                'Dynamic server deleted.',
+                [
+                    'server_id' => $serverId,
+                ]
+            );
         } catch (Throwable $exception) {
-            Log::error('Could not delete dynamic server from database.', [
-                'server_id' => $serverId,
-                'error' => $exception->getMessage(),
-            ]);
+            Log::error(
+                'Could not delete dynamic server from database.',
+                [
+                    'server_id' => $serverId,
+                    'error' =>
+                        $exception->getMessage(),
+                ]
+            );
         }
     }
 }
