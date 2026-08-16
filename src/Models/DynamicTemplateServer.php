@@ -10,6 +10,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $id
  * @property int $dynamic_template_id
  * @property int $server_id
+ * @property-read DynamicTemplate|null $template
+ * @property-read Server|null $server
  */
 class DynamicTemplateServer extends Model
 {
@@ -18,6 +20,9 @@ class DynamicTemplateServer extends Model
         'server_id',
     ];
 
+    /**
+     * @return BelongsTo<DynamicTemplate, $this>
+     */
     public function template(): BelongsTo
     {
         return $this->belongsTo(
@@ -26,8 +31,14 @@ class DynamicTemplateServer extends Model
         );
     }
 
+    /**
+     * @return BelongsTo<Server, $this>
+     */
     public function server(): BelongsTo
     {
-        return $this->belongsTo(Server::class);
+        return $this->belongsTo(
+            Server::class,
+            'server_id'
+        );
     }
 }

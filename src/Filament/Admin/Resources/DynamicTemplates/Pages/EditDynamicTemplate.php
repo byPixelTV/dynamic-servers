@@ -4,14 +4,18 @@ namespace ByPixelTV\Dynamicservers\Filament\Admin\Resources\DynamicTemplates\Pag
 
 use App\Models\Allocation;
 use App\Models\Egg;
+use App\Models\Server;
+use App\Repositories\Daemon\DaemonServerRepository;
 use ByPixelTV\Dynamicservers\Filament\Admin\Resources\DynamicTemplateResource;
 use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
 use ByPixelTV\Dynamicservers\Livewire\TemplateFileManager;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
+use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use Closure;
 use Filament\Actions\Action;
 use Filament\Forms;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Livewire;
@@ -21,6 +25,7 @@ use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Throwable;
 
 class EditDynamicTemplate extends EditRecord
 {
@@ -348,6 +353,95 @@ class EditDynamicTemplate extends EditRecord
                 ->icon('tabler-device-floppy')
                 ->keyBindings(['mod+s'])
                 ->action('save'),
+
+            Action::make('delete_all_servers')
+                ->label('Delete all servers')
+                ->icon('tabler-server-off')
+                ->color('danger')
+                ->visible(
+                    fn (): bool =>
+                    DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $this->getRecord()->getKey()
+                        )
+                        ->exists()
+                )
+                ->requiresConfirmation()
+                ->modalHeading(fn () =>
+                    'Delete all ' .
+                    DynamicTemplateServer::query()
+                        ->where('dynamic_template_id', $this->getRecord()->getKey())
+                        ->count() .
+                    ' dynamic servers?'
+                )
+                ->modalDescription(
+                    'This will permanently delete every server created from this template. Auto creation will also be disabled.'
+                )
+                ->modalSubmitActionLabel('Delete all servers')
+                ->action(function (): void {
+                    $record = $this->getRecord();
+
+                    $record->update([
+                        'auto_creation' => false,
+                    ]);
+
+                    $dynamicServers = DynamicTemplateServer::query()
+                        ->where('dynamic_template_id', $record->getKey())
+                        ->with('server')
+                        ->get();
+
+                    $deleted = 0;
+                    $failed = 0;
+
+                    foreach ($dynamicServers as $dynamicServer) {
+                        /** @var DynamicTemplateServer $dynamicServer */
+                        /** @var Server|null $server */
+                        $server = $dynamicServer->server;
+
+                        if (!$server) {
+                            $dynamicServer->delete();
+                            continue;
+                        }
+
+                        try {
+                            $repository = app(DaemonServerRepository::class);
+
+                            try {
+                                $repository
+                                    ->setServer($server)
+                                    ->delete();
+                            } catch (Throwable) {
+                            }
+
+                            $server->delete();
+
+                            $deleted++;
+                        } catch (Throwable $exception) {
+                            report($exception);
+
+                            $failed++;
+                        }
+                    }
+
+                    if ($failed > 0) {
+                        Notification::make()
+                            ->title('Servers partially deleted')
+                            ->body(
+                                "{$deleted} server(s) deleted, {$failed} failed."
+                            )
+                            ->warning()
+                            ->send();
+
+                        return;
+                    }
+
+                    Notification::make()
+                        ->title('All dynamic servers deleted')
+                        ->body("{$deleted} server(s) deleted.")
+                        ->success()
+                        ->send();
+                }),
         ];
     }
 
