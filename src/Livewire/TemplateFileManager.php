@@ -318,7 +318,7 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                 Action::make('rename')
                     ->hiddenLabel()
                     ->tooltip('Rename')
-                    ->icon('tabler-pencil')
+                    ->icon('tabler-cursor-text')
                     ->iconSize(IconSize::Small)
                     ->schema([
                         TextInput::make('name')

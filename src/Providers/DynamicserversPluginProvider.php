@@ -2,8 +2,11 @@
 
 namespace ByPixelTV\Dynamicservers\Providers;
 
+use App\Enums\ConsoleWidgetPosition;
+use App\Filament\Server\Pages\Console;
 use App\Models\Role;
 use App\Models\Server;
+use ByPixelTV\Dynamicservers\Filament\Server\Widgets\DynamicServerPowerWatcher;
 use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
@@ -16,6 +19,13 @@ class DynamicserversPluginProvider extends ServiceProvider
 {
     public function register(): void
     {
+        Console::registerCustomWidgets(
+            ConsoleWidgetPosition::Bottom,
+            [
+                DynamicServerPowerWatcher::class,
+            ]
+        );
+
         Role::registerCustomPermissions([
             'dynamicTemplate' => [
                 'viewAny',

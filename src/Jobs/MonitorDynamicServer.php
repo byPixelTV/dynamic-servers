@@ -5,6 +5,7 @@ namespace ByPixelTV\Dynamicservers\Jobs;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonServerRepository;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
+use ByPixelTV\Dynamicservers\Support\DynamicServerPowerState;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -64,7 +65,7 @@ class MonitorDynamicServer implements ShouldQueue
 
         try {
             $server->refresh();
-            
+
             if ($server->status !== null) {
                 $this->scheduleNext($dynamicServer);
 
@@ -79,6 +80,10 @@ class MonitorDynamicServer implements ShouldQueue
                 (string) ($details['state'] ?? '')
             );
 
+            $powerAction = DynamicServerPowerState::get(
+                $server
+            );
+
             Log::debug('Dynamic server monitor state.', [
                 'server_id' => $server->getKey(),
                 'state' => $state,
@@ -87,14 +92,63 @@ class MonitorDynamicServer implements ShouldQueue
             $offlineKey =
                 "dynamicservers:offline-since:{$server->getKey()}";
 
+            if ($state === 'running') {
+                Cache::forget($offlineKey);
+
+                DynamicServerPowerState::clear(
+                    $server
+                );
+
+                $this->scheduleNext(
+                    $dynamicServer
+                );
+
+                return;
+            }
+
             if (
-                $server->created_at?->gt(
-                    now()->subSeconds(30)
+                in_array(
+                    $state,
+                    ['offline', 'missing'],
+                    true
+                )
+                && in_array(
+                    $powerAction,
+                    ['stop', 'kill'],
+                    true
                 )
             ) {
                 Cache::forget($offlineKey);
 
-                $this->scheduleNext($dynamicServer);
+                DynamicServerPowerState::clear(
+                    $server
+                );
+
+                $this->deleteDynamicServer(
+                    $server,
+                    $repository
+                );
+
+                return;
+            }
+
+            if (
+                in_array(
+                    $state,
+                    ['offline', 'missing'],
+                    true
+                )
+                && in_array(
+                    $powerAction,
+                    ['restart', 'start'],
+                    true
+                )
+            ) {
+                Cache::forget($offlineKey);
+
+                $this->scheduleNext(
+                    $dynamicServer
+                );
 
                 return;
             }
@@ -108,7 +162,9 @@ class MonitorDynamicServer implements ShouldQueue
             ) {
                 Cache::forget($offlineKey);
 
-                $this->scheduleNext($dynamicServer);
+                $this->scheduleNext(
+                    $dynamicServer
+                );
 
                 return;
             }
@@ -124,17 +180,20 @@ class MonitorDynamicServer implements ShouldQueue
                     now()->addMinutes(5)
                 );
 
-                $this->scheduleNext($dynamicServer);
+                $this->scheduleNext(
+                    $dynamicServer
+                );
 
                 return;
             }
 
             if (
-                now()->timestamp
-                - (int) $offlineSince
-                < 15
+                now()->timestamp - (int) $offlineSince
+                < 10
             ) {
-                $this->scheduleNext($dynamicServer);
+                $this->scheduleNext(
+                    $dynamicServer
+                );
 
                 return;
             }
@@ -145,7 +204,6 @@ class MonitorDynamicServer implements ShouldQueue
                 $server,
                 $repository
             );
-
         } catch (Throwable $exception) {
             Log::error(
                 'Dynamic server monitor failed.',
