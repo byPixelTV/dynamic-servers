@@ -11,6 +11,7 @@ use ByPixelTV\Dynamicservers\Jobs\AutoScaleDynamicTemplate;
 use ByPixelTV\Dynamicservers\Livewire\TemplateFileManager;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
+use ByPixelTV\Dynamicservers\Services\DynamicServerCreationService;
 use Closure;
 use Filament\Actions\Action;
 use Filament\Forms;
@@ -353,6 +354,95 @@ class EditDynamicTemplate extends EditRecord
                 ->icon('tabler-device-floppy')
                 ->keyBindings(['mod+s'])
                 ->action('save'),
+
+            Action::make('apply_template')
+                ->label('Apply template to servers')
+                ->icon('tabler-files')
+                ->color('warning')
+                ->requiresConfirmation()
+                ->modalHeading('Apply template to all servers?')
+                ->modalDescription(
+                    'All template files will be copied again to every existing server created from this template. Existing files with the same name will be overwritten.'
+                )
+                ->visible(
+                    fn (): bool =>
+                    DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $this->getRecord()->getKey()
+                        )
+                        ->exists()
+                )
+                ->modalSubmitActionLabel('Apply template')
+                ->visible(
+                    fn (): bool =>
+                    DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $this->getRecord()->getKey()
+                        )
+                        ->exists()
+                )
+                ->action(function (
+                    DynamicServerCreationService $creationService
+                ): void {
+                    /** @var \ByPixelTV\Dynamicservers\Models\DynamicTemplate $template */
+                    $template = $this->getRecord();
+
+                    $dynamicServers = DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $template->getKey()
+                        )
+                        ->with('server')
+                        ->get();
+
+                    $updated = 0;
+                    $failed = 0;
+
+                    /** @var DynamicTemplateServer $dynamicServer */
+                    foreach ($dynamicServers as $dynamicServer) {
+                        /** @var Server|null $server */
+                        $server = $dynamicServer->getRelation('server');
+
+                        if (!$server) {
+                            continue;
+                        }
+
+                        try {
+                            $creationService->applyTemplateFiles(
+                                $template,
+                                $server
+                            );
+
+                            $updated++;
+                        } catch (Throwable $exception) {
+                            report($exception);
+
+                            $failed++;
+                        }
+                    }
+
+                    if ($failed > 0) {
+                        Notification::make()
+                            ->title('Template partially applied')
+                            ->body(
+                                "{$updated} server(s) updated, {$failed} failed."
+                            )
+                            ->warning()
+                            ->send();
+
+                        return;
+                    }
+
+                    Notification::make()
+                        ->title('Template applied')
+                        ->body(
+                            "{$updated} server(s) updated successfully."
+                        )
+                        ->success()
+                        ->send();
+                }),
 
             Action::make('delete_all_servers')
                 ->label('Delete all servers')

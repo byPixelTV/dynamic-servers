@@ -2,7 +2,7 @@
 
 namespace ByPixelTV\Dynamicservers\Services;
 
-use App\Exceptions\DisplayException;
+use App\Exceptions\Repository\FileExistsException;
 use App\Exceptions\Service\Deployment\NoViableAllocationException;
 use App\Models\Allocation;
 use App\Models\Server;
@@ -12,6 +12,7 @@ use ByPixelTV\Dynamicservers\Jobs\MonitorDynamicServer;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use Exception;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -25,7 +26,6 @@ class DynamicServerCreationService
     }
 
     /**
-     * @throws DisplayException
      * @throws NoViableAllocationException
      * @throws  Throwable
      */
@@ -149,6 +149,47 @@ class DynamicServerCreationService
         );
 
         return $server;
+    }
+
+    /**
+     * @throws FileExistsException
+     * @throws ConnectionException
+     */
+    public function applyTemplateFiles(
+        DynamicTemplate $template,
+        Server $server
+    ): void {
+        $disk = Storage::disk('local');
+
+        $rootPath = "dynamic-templates-tree/{$template->getKey()}";
+
+        if (!$disk->exists($rootPath)) {
+            return;
+        }
+
+        $repository = (new DaemonFileRepository())
+            ->setServer($server);
+
+        foreach ($disk->allFiles($rootPath) as $filePath) {
+            $relativePath = ltrim(
+                substr(
+                    $filePath,
+                    strlen($rootPath)
+                ),
+                '/'
+            );
+
+            if ($relativePath === '') {
+                continue;
+            }
+
+            $content = $disk->get($filePath);
+
+            $repository->putContent(
+                $relativePath,
+                $content
+            );
+        }
     }
 
     protected function copyTemplateFiles(
