@@ -21,6 +21,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Component;
 use Livewire\WithFileUploads;
+use PharFileInfo;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 use App\Enums\EditorLanguages;
@@ -29,6 +30,10 @@ use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use PharData;
+use RecursiveIteratorIterator;
+use RuntimeException;
+use ZipArchive;
 
 class TemplateFileManager extends Component implements HasActions, HasSchemas, HasTable
 {
@@ -288,6 +293,28 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                         )
                     ),
 
+                Action::make('extract')
+                    ->hiddenLabel()
+                    ->tooltip('Extract')
+                    ->icon('tabler-package-export')
+                    ->iconSize(IconSize::Small)
+                    ->visible(
+                        fn (array $record) =>
+                            !$record['is_directory']
+                            && $this->isExtractableArchive($record['name'])
+                    )
+                    ->requiresConfirmation()
+                    ->modalHeading('Extract archive?')
+                    ->modalDescription(
+                        fn (array $record) =>
+                        "Extract {$record['name']} into the current folder?"
+                    )
+                    ->modalSubmitActionLabel('Extract')
+                    ->action(
+                        fn (array $record) =>
+                        $this->extractArchive($record['name'])
+                    ),
+
                 Action::make('rename')
                     ->hiddenLabel()
                     ->tooltip('Rename')
@@ -371,6 +398,254 @@ class TemplateFileManager extends Component implements HasActions, HasSchemas, H
                         $this->createFolder($data['name']);
                     }),
             ]);
+    }
+
+    public function isExtractableArchive(string $name): bool
+    {
+        $name = strtolower($name);
+
+        return str_ends_with($name, '.zip')
+            || str_ends_with($name, '.tar')
+            || str_ends_with($name, '.tar.gz')
+            || str_ends_with($name, '.tgz')
+            || str_ends_with($name, '.tar.bz2')
+            || str_ends_with($name, '.tbz2');
+    }
+
+    public function extractArchive(string $name): void
+    {
+        if (
+            !$this->isValidEntryName($name)
+            || !$this->isExtractableArchive($name)
+        ) {
+            Notification::make()
+                ->title('Unsupported archive')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $disk = Storage::disk('local');
+
+        $relativePath = trim(
+            $this->currentPath . '/' . $name,
+            '/'
+        );
+
+        $storagePath = $this->fullPath($relativePath);
+
+        if (!$disk->exists($storagePath)) {
+            Notification::make()
+                ->title('Archive not found')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $archivePath = $disk->path($storagePath);
+
+        $destinationPath = $disk->path(
+            $this->fullPath($this->currentPath)
+        );
+
+        try {
+            if (str_ends_with(strtolower($name), '.zip')) {
+                $this->extractZip(
+                    $archivePath,
+                    $destinationPath
+                );
+            } else {
+                $this->extractTarArchive(
+                    $archivePath,
+                    $destinationPath
+                );
+            }
+
+            Notification::make()
+                ->title('Archive extracted')
+                ->body($name)
+                ->success()
+                ->send();
+
+            $this->resetTable();
+        } catch (Throwable $exception) {
+            Notification::make()
+                ->title('Could not extract archive')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        }
+    }
+
+    protected function extractZip(
+        string $archivePath,
+        string $destinationPath
+    ): void {
+        $zip = new ZipArchive();
+
+        $result = $zip->open($archivePath);
+
+        if ($result !== true) {
+            throw new RuntimeException(
+                'Could not open ZIP archive.'
+            );
+        }
+
+        try {
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $entry = $zip->getNameIndex($i);
+
+                if ($entry === false) {
+                    continue;
+                }
+
+                $this->validateArchiveEntry($entry);
+            }
+
+            if (!$zip->extractTo($destinationPath)) {
+                throw new RuntimeException(
+                    'Could not extract ZIP archive.'
+                );
+            }
+        } finally {
+            $zip->close();
+        }
+    }
+
+    protected function extractTarArchive(
+        string $archivePath,
+        string $destinationPath
+    ): void {
+        $archive = new PharData($archivePath);
+        foreach (
+            new RecursiveIteratorIterator(
+                $archive,
+                RecursiveIteratorIterator::SELF_FIRST
+            ) as $file
+        ) {
+            if (!$file instanceof PharFileInfo) {
+                continue;
+            }
+
+            $relativePath = $this->getRelativePathname(
+                $file,
+                $archivePath
+            );
+
+            $this->validateArchiveEntry(
+                $relativePath
+            );
+        }
+
+        $archive->extractTo(
+            $destinationPath,
+            null,
+            true
+        );
+    }
+
+    protected function getRelativePathname(
+        PharFileInfo $file,
+        string $archivePath
+    ): string {
+        $path = str_replace(
+            '\\',
+            '/',
+            $file->getPathname()
+        );
+
+        $archivePath = str_replace(
+            '\\',
+            '/',
+            $archivePath
+        );
+
+        $prefix = 'phar://' . $archivePath . '/';
+
+        if (str_starts_with($path, $prefix)) {
+            return substr(
+                $path,
+                strlen($prefix)
+            );
+        }
+
+        $marker = basename($archivePath) . '/';
+
+        $position = strpos(
+            $path,
+            $marker
+        );
+
+        if ($position !== false) {
+            return substr(
+                $path,
+                $position + strlen($marker)
+            );
+        }
+
+        throw new RuntimeException(
+            'Could not determine archive entry path.'
+        );
+    }
+
+    protected function validateArchiveEntry(
+        string $entry
+    ): void {
+        $entry = str_replace(
+            '\\',
+            '/',
+            $entry
+        );
+
+        while (str_starts_with($entry, './')) {
+            $entry = substr($entry, 2);
+        }
+
+        if ($entry === '') {
+            return;
+        }
+
+        if (str_starts_with($entry, '/')) {
+            throw new RuntimeException(
+                'Archive contains an unsafe absolute path.'
+            );
+        }
+
+        if (
+            preg_match(
+                '/^[a-zA-Z]:\//',
+                $entry
+            )
+        ) {
+            throw new RuntimeException(
+                'Archive contains an unsafe absolute path.'
+            );
+        }
+
+        if (str_starts_with($entry, '//')) {
+            throw new RuntimeException(
+                'Archive contains an unsafe UNC path.'
+            );
+        }
+
+        $parts = explode(
+            '/',
+            $entry
+        );
+
+        if (in_array('..', $parts, true)) {
+            throw new RuntimeException(
+                'Archive contains an unsafe parent path.'
+            );
+        }
+
+        if (str_contains($entry, "\0")) {
+            throw new RuntimeException(
+                'Archive contains an invalid path.'
+            );
+        }
     }
 
     public function openFolder(
