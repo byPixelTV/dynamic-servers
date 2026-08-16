@@ -3,15 +3,16 @@
 namespace ByPixelTV\Dynamicservers\Jobs;
 
 use App\Models\Server;
-use ByPixelTV\Dynamicservers\Repositories\DynamicServerDaemonRepository;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
+use App\Repositories\Daemon\DaemonServerRepository;
 
 class StopAndDeleteDynamicServer implements ShouldQueue
 {
@@ -29,8 +30,12 @@ class StopAndDeleteDynamicServer implements ShouldQueue
     ) {
     }
 
+    /**
+     * @throws Throwable
+     * @throws ConnectionException
+     */
     public function handle(
-        DynamicServerDaemonRepository $repository
+        DaemonServerRepository $repository
     ): void {
         /** @var Server|null $server */
         $server = Server::query()
@@ -72,7 +77,9 @@ class StopAndDeleteDynamicServer implements ShouldQueue
                     ]
                 );
 
-                $repository->power('stop');
+                $repository
+                    ->setServer($server)
+                    ->power('stop');
 
                 $stopped = $this->waitForOffline(
                     $repository,
@@ -87,7 +94,9 @@ class StopAndDeleteDynamicServer implements ShouldQueue
                         ]
                     );
 
-                    $repository->power('kill');
+                    $repository
+                        ->setServer($server)
+                        ->power('kill');
 
                     $this->waitForOffline(
                         $repository,
@@ -136,7 +145,7 @@ class StopAndDeleteDynamicServer implements ShouldQueue
     }
 
     private function getState(
-        DynamicServerDaemonRepository $repository
+        DaemonServerRepository $repository
     ): string {
         $details = $repository->getDetails();
 
@@ -146,7 +155,7 @@ class StopAndDeleteDynamicServer implements ShouldQueue
     }
 
     private function waitForOffline(
-        DynamicServerDaemonRepository $repository,
+        DaemonServerRepository $repository,
         int $timeout
     ): bool {
         $deadline = time() + $timeout;
