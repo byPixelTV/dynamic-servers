@@ -12,6 +12,7 @@ use ByPixelTV\Dynamicservers\Jobs\StopAndDeleteDynamicServer;
 use ByPixelTV\Dynamicservers\Livewire\TemplateFileManager;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
+use ByPixelTV\Dynamicservers\Repositories\DynamicServerCommandRepository;
 use ByPixelTV\Dynamicservers\Services\DynamicServerCreationService;
 use Closure;
 use Filament\Actions\Action;
@@ -27,6 +28,7 @@ use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class EditDynamicTemplate extends EditRecord
@@ -442,6 +444,115 @@ class EditDynamicTemplate extends EditRecord
                         )
                         ->success()
                         ->send();
+                }),
+
+            Action::make('execute_command')
+                ->label('Execute command')
+                ->icon('tabler-terminal-2')
+                ->color('primary')
+                ->visible(
+                    fn (): bool =>
+                    DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $this->getRecord()->getKey()
+                        )
+                        ->exists()
+                )
+                ->schema([
+                    Forms\Components\TextInput::make('command')
+                        ->label('Console command')
+                        ->placeholder('say Hello World!')
+                        ->required()
+                        ->autofocus(),
+                ])
+                ->modalHeading('Execute command on all dynamic servers')
+                ->modalDescription(
+                    'The command will be sent to every running server created from this template.'
+                )
+                ->modalSubmitActionLabel('Execute command')
+                ->action(function (
+                    array $data,
+                    DynamicServerCommandRepository $repository
+                ): void {
+                    /** @var DynamicTemplate $template */
+                    $template = $this->getRecord();
+
+                    $dynamicServers = DynamicTemplateServer::query()
+                        ->where(
+                            'dynamic_template_id',
+                            $template->getKey()
+                        )
+                        ->with('server')
+                        ->get();
+
+                    $sent = 0;
+                    $skipped = 0;
+                    $failed = 0;
+
+                    /** @var DynamicTemplateServer $dynamicServer */
+                    foreach ($dynamicServers as $dynamicServer) {
+                        /** @var Server|null $server */
+                        $server = $dynamicServer->getRelation('server');
+
+                        if (!$server) {
+                            $skipped++;
+                            continue;
+                        }
+
+                        try {
+                            $details = app(DaemonServerRepository::class)
+                                ->setServer($server)
+                                ->getDetails();
+
+                            $state = strtolower(
+                                (string) ($details['state'] ?? '')
+                            );
+
+                            if ($state !== 'running') {
+                                $skipped++;
+
+                                continue;
+                            }
+
+                            $repository
+                                ->setServer($server)
+                                ->command(
+                                    (string) $data['command']
+                                );
+
+                            $sent++;
+                        } catch (Throwable $exception) {
+                            report($exception);
+
+                            Log::warning(
+                                'Could not execute command on dynamic server.',
+                                [
+                                    'server_id' => $server->getKey(),
+                                    'command' => $data['command'],
+                                    'error' => $exception->getMessage(),
+                                ]
+                            );
+
+                            $failed++;
+                        }
+                    }
+
+                    $notification = Notification::make()
+                        ->title('Command executed')
+                        ->body(
+                            "{$sent} server(s) received the command, "
+                            . "{$skipped} skipped, "
+                            . "{$failed} failed."
+                        );
+
+                    if ($failed > 0) {
+                        $notification->warning();
+                    } else {
+                        $notification->success();
+                    }
+
+                    $notification->send();
                 }),
 
             Action::make('delete_all_servers')
