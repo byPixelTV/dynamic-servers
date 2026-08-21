@@ -7,10 +7,10 @@ use App\Models\Allocation;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use App\Services\Servers\ServerCreationService;
+use ByPixelTV\Dynamicservers\Jobs\ApplyTemplateFiles;
 use ByPixelTV\Dynamicservers\Jobs\MonitorDynamicServer;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
-use Exception;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -128,7 +128,9 @@ class DynamicServerCreationService
             'environment' => $environment,
 
             'skip_scripts' => false,
-            'start_on_completion' => true,
+            // The server must not start before all template files have been
+            // applied. ApplyTemplateFiles starts it after a successful copy.
+            'start_on_completion' => false,
         ];
 
         $server = $this->serverCreationService->handle($data);
@@ -138,15 +140,14 @@ class DynamicServerCreationService
         $dynamicServer->server_id = $server->getKey();
         $dynamicServer->save();
 
+        ApplyTemplateFiles::dispatch(
+            $dynamicServer->getKey()
+        )->delay(now()->addSecond());
+
         // Delay monitoring by 60 seconds to allow server to fully start
         MonitorDynamicServer::dispatch(
             $dynamicServer->getKey()
         )->delay(now()->addSeconds(60));
-
-        $this->copyTemplateFiles(
-            $template,
-            $server
-        );
 
         return $server;
     }
@@ -200,8 +201,6 @@ class DynamicServerCreationService
 
                     $success = true;
 
-                    usleep(50_000);
-
                     break;
                 } catch (Throwable $exception) {
                     Log::warning(
@@ -236,40 +235,4 @@ class DynamicServerCreationService
         }
     }
 
-    protected function copyTemplateFiles(
-        DynamicTemplate $template,
-                        $server
-    ): void {
-        $treeRoot = "dynamic-templates-tree/{$template->getKey()}";
-
-        $allFiles = Storage::disk('local')
-            ->allFiles($treeRoot);
-
-        if (empty($allFiles)) {
-            return;
-        }
-
-        /** @var DaemonFileRepository $fileRepository */
-        $fileRepository = app(DaemonFileRepository::class)
-            ->setServer($server);
-
-        foreach ($allFiles as $absolutePath) {
-            $relativePath = ltrim(
-                str($absolutePath)->after($treeRoot),
-                '/'
-            );
-
-            $content = Storage::disk('local')
-                ->get($absolutePath);
-
-            try {
-                $fileRepository->putContent(
-                    $relativePath,
-                    $content
-                );
-            } catch (Exception) {
-                //
-            }
-        }
-    }
 }
