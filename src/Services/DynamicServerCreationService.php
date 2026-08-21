@@ -2,7 +2,6 @@
 
 namespace ByPixelTV\Dynamicservers\Services;
 
-use App\Exceptions\Repository\FileExistsException;
 use App\Exceptions\Service\Deployment\NoViableAllocationException;
 use App\Models\Allocation;
 use App\Models\Server;
@@ -12,7 +11,6 @@ use ByPixelTV\Dynamicservers\Jobs\MonitorDynamicServer;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplate;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
 use Exception;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -140,9 +138,10 @@ class DynamicServerCreationService
         $dynamicServer->server_id = $server->getKey();
         $dynamicServer->save();
 
+        // Delay monitoring by 60 seconds to allow server to fully start
         MonitorDynamicServer::dispatch(
             $dynamicServer->getKey()
-        )->delay(now()->addSeconds(5));
+        )->delay(now()->addSeconds(60));
 
         $this->copyTemplateFiles(
             $template,

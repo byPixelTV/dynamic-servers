@@ -19,10 +19,11 @@ class DynamicServerPowerState
             return;
         }
 
+        // Extend cache to 10 minutes to survive multiple monitoring cycles
         Cache::put(
             self::key($server),
             $action,
-            now()->addMinutes(2)
+            now()->addMinutes(10)
         );
     }
 

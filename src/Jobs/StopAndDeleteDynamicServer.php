@@ -51,7 +51,7 @@ class StopAndDeleteDynamicServer implements ShouldQueue
         Cache::put(
             $cacheKey,
             true,
-            now()->addMinutes(2)
+            now()->addMinutes(5)
         );
 
         try {
@@ -83,7 +83,7 @@ class StopAndDeleteDynamicServer implements ShouldQueue
 
                 $stopped = $this->waitForOffline(
                     $repository,
-                    30
+                    60
                 );
 
                 if (!$stopped) {
@@ -100,7 +100,7 @@ class StopAndDeleteDynamicServer implements ShouldQueue
 
                     $this->waitForOffline(
                         $repository,
-                        10
+                        15
                     );
                 }
             }

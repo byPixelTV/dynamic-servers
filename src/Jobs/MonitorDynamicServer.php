@@ -95,6 +95,7 @@ class MonitorDynamicServer implements ShouldQueue
             Log::debug('Dynamic server monitor state.', [
                 'server_id' => $server->getKey(),
                 'state' => $state,
+                'power_action' => $powerAction,
             ]);
 
             $offlineKey =
@@ -161,56 +162,50 @@ class MonitorDynamicServer implements ShouldQueue
                 return;
             }
 
-            if (
-                !in_array(
-                    $state,
-                    ['offline', 'missing'],
-                    true
-                )
-            ) {
+            // If power action is unknown (null), assume server is starting
+            if ($powerAction === null) {
+                $offlineSince = Cache::get(
+                    $offlineKey
+                );
+
+                if ($offlineSince === null) {
+                    Cache::put(
+                        $offlineKey,
+                        now()->timestamp,
+                        now()->addMinutes(15)
+                    );
+
+                    $this->scheduleNext(
+                        $dynamicServer
+                    );
+
+                    return;
+                }
+
+                // Extended timeout of 120 seconds to allow servers to fully start
+                if (
+                    now()->timestamp - (int) $offlineSince
+                    < 120
+                ) {
+                    $this->scheduleNext(
+                        $dynamicServer
+                    );
+
+                    return;
+                }
+
                 Cache::forget($offlineKey);
 
-                $this->scheduleNext(
-                    $dynamicServer
+                $this->deleteDynamicServer(
+                    $server,
+                    $repository
                 );
 
                 return;
             }
 
-            $offlineSince = Cache::get(
-                $offlineKey
-            );
-
-            if ($offlineSince === null) {
-                Cache::put(
-                    $offlineKey,
-                    now()->timestamp,
-                    now()->addMinutes(5)
-                );
-
-                $this->scheduleNext(
-                    $dynamicServer
-                );
-
-                return;
-            }
-
-            if (
-                now()->timestamp - (int) $offlineSince
-                < 10
-            ) {
-                $this->scheduleNext(
-                    $dynamicServer
-                );
-
-                return;
-            }
-
-            Cache::forget($offlineKey);
-
-            $this->deleteDynamicServer(
-                $server,
-                $repository
+            $this->scheduleNext(
+                $dynamicServer
             );
         } catch (Throwable $exception) {
             Log::error(

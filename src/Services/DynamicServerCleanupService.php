@@ -5,6 +5,7 @@ namespace ByPixelTV\Dynamicservers\Services;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonServerRepository;
 use ByPixelTV\Dynamicservers\Models\DynamicTemplateServer;
+use ByPixelTV\Dynamicservers\Support\DynamicServerPowerState;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -47,7 +48,19 @@ class DynamicServerCleanupService
                 'state' => $state,
             ]);
 
+            // Only delete if confirmed offline
             if (!in_array($state, ['offline', 'missing'], true)) {
+                return;
+            }
+
+            // Check power state - if starting/restarting, don't delete
+            $powerAction = DynamicServerPowerState::get($server);
+            
+            if (in_array($powerAction, ['restart', 'start'], true)) {
+                Log::info('Dynamic server is starting, skipping deletion.', [
+                    'server_id' => $server->getKey(),
+                    'power_action' => $powerAction,
+                ]);
                 return;
             }
 
